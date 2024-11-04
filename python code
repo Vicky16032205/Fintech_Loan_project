@@ -1,0 +1,220 @@
+# Loan Eligibility and Financial Advisory System
+
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Ensure scikit-learn is up-to-date
+!pip install -U scikit-learn
+
+# Load the dataset
+try:
+    # Replace 'your_dataset.csv' with the actual filename or path
+    df = pd.read_csv('/content/Loan_default.csv')
+except FileNotFoundError:
+    print("Error: The dataset file was not found. Please check the file path.")
+    exit()
+except pd.errors.EmptyDataError:
+    print("Error: The dataset file is empty.")
+    exit()
+except pd.errors.ParserError:
+    print("Error: Unable to parse the dataset file. Please check if it's a valid CSV.")
+    exit()
+
+# Display basic information about the dataset
+print(df.info())
+print("\nSample data:")
+print(df.head())
+
+# Check for missing values
+missing_values = df.isnull().sum()
+print("\nMissing values:")
+print(missing_values)
+
+if missing_values.sum() > 0:
+    print("Warning: The dataset contains missing values. They will be handled in the preprocessing step.")
+
+# Data Preprocessing
+# Handle missing values
+df = df.dropna()
+
+# Check column types
+print("\nColumn types:")
+print(df.dtypes)
+
+# Identify numeric and categorical columns
+numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
+categorical_columns = df.select_dtypes(include=[object]).columns.tolist()
+
+# Remove 'Default' and 'LoanID' from feature columns if present
+if 'Default' in numeric_columns:
+    numeric_columns.remove('Default')
+if 'LoanID' in categorical_columns:
+    categorical_columns.remove('LoanID')
+
+print("\nNumeric columns:", numeric_columns)
+print("Categorical columns:", categorical_columns)
+
+# Separate features and target variable
+if 'Default' in df.columns:
+    X = df.drop(['Default', 'LoanID'], axis=1, errors='ignore')
+    y = df['Default']
+else:
+    print("Error: Default column not found in the dataset.")
+    exit()
+
+# Convert data types
+for col in numeric_columns:
+    X[col] = pd.to_numeric(X[col], errors='coerce')
+
+for col in categorical_columns:
+    X[col] = X[col].astype(str)
+
+# Create preprocessing steps
+numeric_transformer = Pipeline([
+    ('scaler', StandardScaler())
+])
+
+categorical_transformer = Pipeline([
+    ('onehot', OneHotEncoder(drop='first', sparse_output=False, handle_unknown='ignore')) # sparse was replaced by sparse_output
+])
+
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', numeric_transformer, numeric_columns),
+        ('cat', categorical_transformer, categorical_columns)
+    ])
+
+# Create a pipeline
+model = Pipeline([
+    ('preprocessor', preprocessor),
+    ('classifier', RandomForestClassifier(n_estimators=100, random_state=42))
+])
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Fit the model
+try:
+    model.fit(X_train, y_train)
+except Exception as e:
+    print(f"An error occurred during model fitting: {str(e)}")
+    print("X_train dtypes:")
+    print(X_train.dtypes)
+    print("\nX_train head:")
+    print(X_train.head())
+    exit()
+
+# Make predictions
+y_pred = model.predict(X_test)
+
+# Evaluate the model
+print("\nClassification Report:")
+print(classification_report(y_test, y_pred))
+
+print("\nConfusion Matrix:")
+print(confusion_matrix(y_test, y_pred))
+
+# Feature Importance
+feature_names = (numeric_columns +
+                 model.named_steps['preprocessor']
+                 .named_transformers_['cat']
+                 .named_steps['onehot']
+                 .get_feature_names_out(categorical_columns).tolist())
+
+feature_importance = pd.DataFrame({
+    'feature': feature_names,
+    'importance': model.named_steps['classifier'].feature_importances_
+}).sort_values('importance', ascending=False)
+
+print("\nTop 10 Most Important Features:")
+print(feature_importance.head(10))
+
+# Visualize feature importance
+plt.figure(figsize=(10, 6))
+sns.barplot(x='importance', y='feature', data=feature_importance.head(10))
+plt.title('Top 10 Most Important Features')
+plt.tight_layout()
+plt.show()
+
+# Financial Advisory System
+def get_loan_advice(applicant_data):
+    # Prepare the applicant data
+    applicant_df = pd.DataFrame([applicant_data])
+
+    # Remove 'LoanID' if present
+    if 'LoanID' in applicant_df.columns:
+        applicant_df = applicant_df.drop('LoanID', axis=1)
+
+    # Convert data types
+    for col in numeric_columns:
+        if col in applicant_df.columns:
+            applicant_df[col] = pd.to_numeric(applicant_df[col], errors='coerce')
+
+    for col in categorical_columns:
+        if col in applicant_df.columns:
+            applicant_df[col] = applicant_df[col].astype(str)
+
+    # Make prediction
+    try:
+        prediction = model.predict(applicant_df)
+        probability = model.predict_proba(applicant_df)[0][1]
+    except Exception as e:
+        print(f"An error occurred during prediction: {str(e)}")
+        print("applicant_df dtypes:")
+        print(applicant_df.dtypes)
+        print("\napplicant_df:")
+        print(applicant_df)
+        raise
+
+    # Generate advice
+    if prediction[0] == 0:
+        result = "Eligible for a loan"
+        advice = f"Congratulations! Based on our model, you are eligible for a loan. The probability of approval is {probability:.2f}."
+    else:
+        result = "Not eligible for a loan"
+        advice = f"We're sorry, but based on our model, you may not be eligible for a loan at this time. The probability of approval is {probability:.2f}."
+
+    # Additional advice based on important features
+    if 'CreditScore' in applicant_data and applicant_data['CreditScore'] < 650:
+        advice += "\nYou may want to focus on improving your credit score to increase your chances of loan approval."
+    if 'DTIRatio' in applicant_data and applicant_data['DTIRatio'] > 0.43:
+        advice += "\nYour debt-to-income ratio is high. Consider reducing your debt or increasing your income to improve your loan eligibility."
+
+    return result, advice
+
+# Example usage of the financial advisory system
+example_applicant = {
+    'Age': 35,
+    'Income': 60000,
+    'LoanAmount': 200000,
+    'CreditScore': 720,
+    'MonthsEmployed': 60,
+    'NumCreditLines': 3,
+    'InterestRate': 4.5,
+    'LoanTerm': 360,
+    'DTIRatio': 0.3,
+    'Education': 'Bachelor',
+    'EmploymentType': 'FullTime',
+    'MaritalStatus': 'Married',
+    'HasMortgage': 0,
+    'HasDependents': 1,
+    'LoanPurpose': 'HomeImprovement',
+    'HasCoSigner': 0
+}
+
+try:
+    result, advice = get_loan_advice(example_applicant)
+    print("\nLoan Application Result:")
+    print(result)
+    print("\nAdvice:")
+    print(advice)
+except Exception as e:
+    print(f"An error occurred while processing the loan application: {str(e)}")
